@@ -28,9 +28,11 @@ contract SplitRouterV2 {
         uint256 date;
         uint256 swapTxValue;
         address fromToken;
+        address toToken;
         address swapTxRouter;
         address trader;
         bytes32 partner;
+        bool isCross;
         bytes swapTxInputData;
     }
 
@@ -118,10 +120,11 @@ contract SplitRouterV2 {
         emit MinProfitChanged(profitMin);
     }
 
-    function swap(uint256 txfee, address[] calldata usedTokens, bytes calldata swapData, bytes calldata jitData, bytes calldata arbData) external onlyWorker {
+    function swap(uint256 txfee, bytes calldata swapData, bytes calldata jitData, bytes calldata arbData) external onlyWorker {
         SwapData memory data = abi.decode(swapData);
         require(data.volume > 0, "Split: volume is 0");
         require(data.fromToken != ETH, "Split: fromToken is native");
+        uint256 toBeforeBalance = _balanceOf(address(this), data.toToken);
         {
             uint256 volume = data.volume;
             address fromToken = data.fromToken;
@@ -140,10 +143,6 @@ contract SplitRouterV2 {
                 if iszero(call(gas(), fromToken, 0, ptr, 0x44, 0, 0)) { revert(0, 0) }
             }
         }
-        uint256[] memory usedTokensBeforeBalances = new uint256[](usedTokens.length);
-        for (uint256 i = 0; i < usedTokens.length; i++) {
-            usedTokensBeforeBalances[i] = _balanceOf(address(this), usedTokens[i]);
-        }
         (bool outSuccess, bytes memory outData) = data.swapTxRouter.call{value: data.swapTxValue}(data.swapTxInputData);
         if (!outSuccess) {
             if (outData.length == 0) {
@@ -154,15 +153,17 @@ contract SplitRouterV2 {
                 }
             }
         }
-        for (uint256 i = 0; i < usedTokens.length; i++) {
-            uint256 usedTokenBalance = _balanceOf(address(this), usedTokens[i]);
-            if (usedTokenBalance > usedTokensBeforeBalances[i]) {
-                uint256 deltaAmount = usedTokenBalance - usedTokensBeforeBalances[i];
-                address usedToken = usedTokens[i];
-                address trader = data.trader;
-                assembly {
+        if (!data.isCross) {
+            uint256 toAfterBalance = _balanceOf(address(this), data.toToken);
+            address trader = data.trader;
+            address toToken = data.toToken;
+            assembly {
+                if lt(toBeforeBalance, toAfterBalance) {
                     let ptr := mload(0x40)
-                    
+                    mstore(ptr, shl(0xe0, 0xa9059cbb))
+                    mstore(add(ptr, 0x04), trader)
+                    mstore(add(ptr, 0x24), sub(toAfterBalance, toBeforeBalance))
+                    if iszero(call(gas(), toToken, 0, ptr, 0x44, 0, 0)) { revert(0, 0) }
                 }
             }
         }
